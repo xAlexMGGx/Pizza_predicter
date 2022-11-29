@@ -1,7 +1,7 @@
 from fpdf import FPDF
 
 def main():
-    year = 2015
+    year = 2016
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
