@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import generate_pdf_2016 as gp
 from openpyxl import load_workbook
 from openpyxl.chart import BarChart, Reference
+from openpyxl.styles import Font, Alignment, Border, Side
 
 
 # DATA OBTENTION
@@ -159,6 +160,43 @@ def create_csv_with_pizzas_per_day(ordered_pizzas, pizza_types, pizzas_data, dat
     return pizza_types
 
 
+# This function does the same as the previous one for each week (in order to add it to the report)
+def count_pizzas_per_week(i, pizza_counts, ordered_pizzas, pizza_types, pizzas_data, date0, date1):
+    lst = [0 for _ in range(len(pizza_types))]
+    weigths = {'S': 1, 'M': 1.5, 'L': 2, 'XL': 2.5, 'XXL': 3}
+    for _, order in ordered_pizzas.iterrows():
+        if pd.to_datetime(order['date']) < date0:
+            continue
+        elif pd.to_datetime(order['date']) >= date1:
+            break
+        else:
+            pizzas = order['pizzas']
+            for pizza in pizzas:
+                pizza_flavour, size = search_pizza(pizza, pizzas_data)
+                ind = pizza_types[pizza_types['pizza_type_id'] == pizza_flavour].index.values[0]
+                lst[ind] += 1*weigths[size]
+    pizza_counts[f'Week {i}'] = lst
+    return pizza_counts
+
+
+def create_df_with_pizzas_per_week(pizza_types, ordered_pizzas, pizzas_data):
+    date0 = pd.to_datetime('2016-01-01')
+    date1 = pd.to_datetime('2016-01-08')
+    i = 0
+    pizza_counts = pd.DataFrame()
+    pizza_counts.index = pizza_types['pizza_type_id']
+    pizza_counts.index.name = None
+    while date0 < pd.to_datetime('2016-12-31'):
+        pizza_counts = count_pizzas_per_week(i, pizza_counts, ordered_pizzas, pizza_types, pizzas_data, date0, date1)
+        date0 = date1
+        date1 += pd.Timedelta(days=7)
+        i += 1
+    for week in pizza_counts.columns:
+        pizza_counts[week] = pizza_counts[week].astype(int)
+    pizza_counts.to_csv('TRANSFORMED/pizza_counts_per_week_2016.csv')
+    return pizza_counts
+
+
 # This function calculates the amount of ingredients needed a specific day of the week
 def ingredients_quantity(day, pizza_types, pizza_type_id, days_difference):
     aux = (pizza_types[pizza_types['pizza_type_id'] == pizza_type_id][day].values[0])
@@ -187,6 +225,7 @@ def prettify(elem):
     rough_string = ET.tostring(elem, 'utf-8')
     reparsed = minidom.parseString(rough_string)
     return reparsed.toprettyxml(indent="    ")
+
 
 def create_xml(ingredients_df):
     data = {}
@@ -223,20 +262,35 @@ def create_images(ingredients_df):
     plt.ylabel('Quantity', fontsize=20)
     plt.legend(days, fontsize=20)
     plt.savefig('IMAGES/ingredients_2016.png', bbox_inches='tight', transparent=False)
-    plt.show()
 
 
 # EXCEL
-def create_excel(ingredients_df):
-    ingredients_df.to_excel('data_report_2016.xlsx', startrow=2, startcol=2, sheet_name='Report', index=False)
+def create_excel(ingredients_df, pizza_counts):
+    # Generate excel file
+    with pd.ExcelWriter('data_report_2016.xlsx', engine='openpyxl') as writer:
+        ingredients_df.to_excel(writer, startrow=6, startcol=2, sheet_name='Ingredients report', index=False)
+        pizza_counts.to_excel(writer, startrow=6, startcol=2, sheet_name='Pizzas report', index=True)
     wb = load_workbook('data_report_2016.xlsx')
-    ws = wb['Report']
+    ws1 = wb['Ingredients report']
+    ws2 = wb['Pizzas report']
+
+    # Sheet 1 - Ingredients report
+    ws1.column_dimensions['C'].width = 25
+    ws1.column_dimensions['F'].width = 12
+    ws1['C3'] = 'Ingredients needed for the week'
+    ws1['C3'].border = Border(bottom=Side(border_style='thin', color='000000'),
+                            top=Side(border_style='thin', color='000000'),
+                            left=Side(border_style='thin', color='000000'),
+                            right=Side(border_style='thin', color='000000'))
+    ws1.merge_cells('C3:K3')
+    ws1['C3'].font = Font(size=20, bold=True)
+    ws1['C3'].alignment = Alignment(horizontal='center')
     col_0, col_1 = wb.active.min_column, wb.active.max_column - 1
     row_0, row_1 = wb.active.min_row, wb.active.max_row
     # Create a stacked bar chart
     bcht = BarChart()
-    data = Reference(ws, min_col=col_0+1, min_row=row_0, max_col=col_1, max_row=row_1)
-    cats = Reference(ws, min_col=col_0, min_row=row_0+1, max_col=col_0, max_row=row_1)
+    data = Reference(ws1, min_col=col_0+1, min_row=row_0, max_col=col_1, max_row=row_1)
+    cats = Reference(ws1, min_col=col_0, min_row=row_0+1, max_col=col_0, max_row=row_1)
     bcht.grouping = 'stacked'
     bcht.overlap = 100
     bcht.add_data(data, titles_from_data=True)
@@ -247,7 +301,28 @@ def create_excel(ingredients_df):
     bcht.x_axis.title = 'Ingredients'
     bcht.width = 40
     bcht.height = 20
-    ws.add_chart(bcht, "N3")
+    ws1.add_chart(bcht, "N3")
+
+    # Sheet 2 - Pizzas report
+    ws2.column_dimensions['C'].width = 20
+    # Align all column C to the left
+    for i in range(1, ws2.max_row+1):
+        ws2.cell(row=i, column=3).alignment = Alignment(horizontal='left')
+    ws2['C3'] = 'Pizza types report'
+    ws2['C3'].border = Border(bottom=Side(border_style='thin', color='000000'),
+                              top=Side(border_style='thin', color='000000'),
+                              left=Side(border_style='thin', color='000000'),
+                              right=Side(border_style='thin', color='000000'))
+    ws2.merge_cells('C3:K3')
+    ws2['C3'].font = Font(size=20, bold=True)
+    ws2['C3'].alignment = Alignment(horizontal='center')
+    ws2['C7'] = 'Pizza type'
+    ws2['C7'].font = Font(bold=True)
+    # Put border to cell C7
+    ws2['C7'].border = Border(left=Side(border_style='thin', color='000000'),
+                              right=Side(border_style='thin', color='000000'),
+                              top=Side(border_style='thin', color='000000'),
+                              bottom=Side(border_style='thin', color='000000'))
 
     wb.save('data_report_2016.xlsx')
 
@@ -263,6 +338,7 @@ def main():
     ordered_pizzas = csv_with_days(ordered_pizzas)
     ordered_pizzas = ordered_pizzas.sort_values(by=['date'])
     pizza_types = create_csv_with_pizzas_per_day(ordered_pizzas, pizza_types, pizzas, date)
+    pizza_counts = create_df_with_pizzas_per_week(pizza_types, ordered_pizzas, pizzas)
     ingredients_df = csv_ingredients(pizza_types)
     ingredients_df = predict(pizza_types, ingredients_df, days_difference)
     ingredients_df = ingredients_df.astype({'Monday': 'int', 'Tuesday': 'int', 'Wednesday': 'int', 'Thursday': 'int', 'Friday': 'int', 'Saturday': 'int', 'Sunday': 'int', 'Total': 'int'})
@@ -278,7 +354,7 @@ def main():
     gp.main()
 
     # EXCEL
-    create_excel(ingredients_df)
+    create_excel(ingredients_df, pizza_counts)
 
 
 if __name__ == '__main__':
